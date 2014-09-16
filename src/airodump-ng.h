@@ -161,14 +161,13 @@ int read_pkts = 0;
 //vasa
 unsigned long ulRead_pkts = 0, ulRead_pkts_tmp = 0;
 unsigned long ulRead_Bytes = 0, ulRead_Bytes_tmp = 0;
-unsigned int g_uiBytesDeltaPerSec = 0;
+unsigned int g_uiBytesDeltaPerSec = 0, g_uiPacketsDeltaPerSec = 0;
 unsigned int g_uiTempTimeAggregator = 0;
 unsigned int g_flag500ms_hopper_for_print = 0;
 struct timeval timeBytesPerSec;
 unsigned long g_ulRead_pkts_beacons = 0;
 
 int g_iLastSetChannel = -1;
-int g_iLastSetChannelHopper = -1;
 
 int abg_chans[] =
 { 1, 7, 13, 2, 8, 3, 14, 9, 4, 10, 5, 11, 6, 12, 36, 40, 44, 48, 52, 56, 60, 64,
@@ -177,9 +176,6 @@ int abg_chans[] =
 
 int bg_chans[] =
 { 1, 7, 13, 2, 8, 3, 14, 9, 4, 10, 5, 11, 6, 12, 0 };
-
-int bg_chans_times_spent[] =
-{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 int a_chans[] =
 { 36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132,
@@ -423,6 +419,7 @@ struct globals
 	 * wasn't enough, so we decided to create a new option to change that timeout.
 	 * We implemented this option in the highest tower (TV Tower) of Berlin, eating an ice.
 	 */
+	unsigned int m_KickCounts;
 
 	int show_ap;
 	int show_sta;
