@@ -36,6 +36,7 @@
 
 /* some constants */
 
+#define MAC_STR_LEN 18 //12:34:56:78:90:00
 #define MAX_IE_ELEMENT_SIZE 256
 
 #define REFRESH_RATE 100000  /* default delay in us between updates */
@@ -157,6 +158,16 @@ static uchar ZERO[32] = "\x00\x00\x00\x00\x00\x00\x00\x00"
 
 int read_pkts = 0;
 
+//vasa
+unsigned long ulRead_pkts = 0, ulRead_pkts_tmp = 0;
+unsigned long ulRead_Bytes = 0, ulRead_Bytes_tmp = 0;
+unsigned int g_uiBytesDeltaPerSec = 0, g_uiPacketsDeltaPerSec = 0;
+unsigned int g_uiTempTimeAggregator = 0;
+unsigned int g_flag500ms_hopper_for_print = 0;
+struct timeval timeBytesPerSec;
+unsigned long g_ulRead_pkts_beacons = 0;
+
+
 int abg_chans[] =
 { 1, 7, 13, 2, 8, 3, 14, 9, 4, 10, 5, 11, 6, 12, 36, 40, 44, 48, 52, 56, 60, 64,
 		100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157,
@@ -164,6 +175,8 @@ int abg_chans[] =
 
 int bg_chans[] =
 { 1, 7, 13, 2, 8, 3, 14, 9, 4, 10, 5, 11, 6, 12, 0 };
+
+struct timeval bg_chans_switch_times[sizeof(bg_chans)/sizeof(bg_chans[0])];
 
 int a_chans[] =
 { 36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132,
@@ -255,8 +268,13 @@ struct AP_info
 	/* + one byte to indicate   */
 	/* (in)existence of the IV  */
 
+	char m_bAirbaseStarted;
+	char m_bUnderAttack;
+	char deauth_if_OPENorWEP;
 	int marked;
 	int marked_color;
+
+	char bWPAHS_completed;
 };
 
 /* linked list of detected clients */
@@ -280,6 +298,11 @@ struct ST_info
 	struct timeval ftimer; /* time of restart           */
 	int missed; /* number of missed packets  */
 	unsigned int lastseq; /* last seen sequence number */
+	unsigned int m_uiEAPOLpkts;
+	unsigned int m_uiAssocLpkts;
+	unsigned long m_lastDeauthProcessingTime_us;
+	struct timeval m_timeval_lastDeauth;
+	unsigned long m_ulLastDeauthTimeDelta_us;
 	struct WPA_hdsk wpa; /* WPA handshake data        */
 	int qos_to_ds; /* does it use 802.11e to ds */
 	int qos_fr_ds; /* does it receive 802.11e   */
@@ -400,6 +423,7 @@ struct globals
 	 * wasn't enough, so we decided to create a new option to change that timeout.
 	 * We implemented this option in the highest tower (TV Tower) of Berlin, eating an ice.
 	 */
+	unsigned int m_KickCounts;
 
 	int show_ap;
 	int show_sta;
@@ -436,6 +460,8 @@ struct globals
 	int selection_ap;
 	int selection_sta;
 	int mark_cur_ap;
+	int mark_cur_ap_to_deauth;
+	int unmark_cur_ap_to_deauth;
 	int num_cards;
 	int skip_columns;
 	int do_pause;
@@ -451,5 +477,8 @@ struct globals
 	int show_manufacturer;
 	int show_uptime;
 } G;
+
+void sighandler(int signum);
+void LogMsg(char* pMsg);
 
 #endif
