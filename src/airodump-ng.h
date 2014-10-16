@@ -451,9 +451,9 @@ struct globals
 	int sort_inv;
 	int start_print_ap;
 	int start_print_sta;
-	int selected_ap;
+	struct AP_info* pSelectedAP;
+	char SelectionDirectionDownOrUP;
 	int selected_sta;
-	int selection_ap;
 	int selection_sta;
 	int mark_cur_ap;
 	int mark_cur_ap_to_deauth;

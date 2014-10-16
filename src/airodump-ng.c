@@ -458,9 +458,10 @@ void resetSelection()
 
 	G.start_print_ap = 1;
 	G.start_print_sta = 1;
-	G.selected_ap = 1;
+	G.SelectionDirectionDownOrUP = 0;
+	G.pSelectedAP = 0;
 	G.selected_sta = 1;
-	G.selection_ap = 0;
+
 	G.selection_sta = 0;
 	G.mark_cur_ap = 0;
 	G.mark_cur_ap_to_deauth = 0;
@@ -502,7 +503,6 @@ void input_thread(void *arg)
 		if (keycode == KEY_s)
 		{
 			G.sort_by++;
-			G.selection_ap = 0;
 			G.selection_sta = 0;
 
 			if (G.sort_by > MAX_SORT)
@@ -609,29 +609,19 @@ void input_thread(void *arg)
 
 		if (keycode == KEY_ARROW_DOWN)
 		{
-			if (G.selection_ap == 1)
+			if (G.pSelectedAP && G.pSelectedAP->prev)
 			{
-				G.selected_ap++;
-			}
-			if (G.selection_sta == 1)
-			{
-				G.selected_sta++;
+				G.pSelectedAP = G.pSelectedAP->prev;
+				G.SelectionDirectionDownOrUP = 1;
 			}
 		}
 
 		if (keycode == KEY_ARROW_UP)
 		{
-			if (G.selection_ap == 1)
+			if (G.pSelectedAP && G.pSelectedAP->next)
 			{
-				G.selected_ap--;
-				if (G.selected_ap < 1)
-					G.selected_ap = 1;
-			}
-			if (G.selection_sta == 1)
-			{
-				G.selected_sta--;
-				if (G.selected_sta < 1)
-					G.selected_sta = 1;
+				G.pSelectedAP = G.pSelectedAP->next;
+				G.SelectionDirectionDownOrUP = 2;
 			}
 		}
 
@@ -648,17 +638,18 @@ void input_thread(void *arg)
 
 		if (keycode == KEY_TAB)
 		{
-			if (G.selection_ap == 0)
+			if (G.pSelectedAP == 0)
 			{
-				G.selection_ap = 1;
-				G.selected_ap = 1;
+				G.pSelectedAP = G.ap_end;
+				G.SelectionDirectionDownOrUP = 1;
 				snprintf(G.message, sizeof(G.message),
 						"][ enabled AP selection");
 				G.sort_by = SORT_BY_NOTHING;
 			}
-			else if (G.selection_ap == 1)
+			else
 			{
-				G.selection_ap = 0;
+				G.SelectionDirectionDownOrUP = 0;
+				G.pSelectedAP = 0;
 				G.sort_by = SORT_BY_NOTHING;
 				snprintf(G.message, sizeof(G.message), "][ disabled selection");
 			}
@@ -3363,6 +3354,28 @@ static char *parse_timestamp(unsigned long long timestamp)
 	return s;
 }
 
+int IsAp2BeSkipped(struct AP_info *ap_cur)
+{
+	if (ap_cur->nb_pkt < 2 || time( NULL) - ap_cur->tlast > G.berlin
+						|| memcmp(ap_cur->bssid, BROADCAST, 6) == 0)
+	{
+		return 1;
+	}
+
+
+	if (ap_cur->security != 0 && G.f_encrypt != 0
+			&& ((ap_cur->security & G.f_encrypt) == 0))
+	{
+		return 1;
+	}
+
+	if (is_filtered_essid(ap_cur->essid))
+	{
+		return 1;
+	}
+	return 0;
+}
+
 void dump_print(int ws_row, int ws_col, int if_num)
 {
 	time_t tt;
@@ -3583,51 +3596,56 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 		ap_cur = G.ap_end;
 
-		if (G.selection_ap)
-		{
-			num_ap = get_ap_list_count();
-			if (G.selected_ap > num_ap)
-				G.selected_ap = num_ap;
-		}
-
-		if (G.selection_sta)
-		{
-			num_sta = get_sta_list_count();
-			if (G.selected_sta > num_sta)
-				G.selected_sta = num_sta;
-		}
-
 		num_ap = 0;
-
-		if (G.selection_ap)
-		{
-			G.start_print_ap = G.selected_ap - ((ws_row - 1) - nlines) + 1;
-			if (G.start_print_ap < 1)
-				G.start_print_ap = 1;
-			//	printf("%i\n", G.start_print_ap);
-		}
 
 		while (ap_cur != NULL)
 		{
 			/* skip APs with only one packet, or those older than 2 min.
 			 * always skip if bssid == broadcast */
-
-			if (ap_cur->nb_pkt < 2 || time( NULL) - ap_cur->tlast > G.berlin
-					|| memcmp(ap_cur->bssid, BROADCAST, 6) == 0)
+			if(IsAp2BeSkipped(ap_cur))
 			{
-				ap_cur = ap_cur->prev;
-				continue;
-			}
-
-			if (ap_cur->security != 0 && G.f_encrypt != 0
-					&& ((ap_cur->security & G.f_encrypt) == 0))
-			{
-				ap_cur = ap_cur->prev;
-				continue;
-			}
-
-			if (is_filtered_essid(ap_cur->essid))
-			{
+				/////////////////////////////////////////////////////////////////////////////////////
+				if(G.pSelectedAP == ap_cur)
+				{//the selected AP is skipped (will not be printed), we have to go to the next printable AP
+					struct AP_info *ap_tmp;
+					if(2 == G.SelectionDirectionDownOrUP)//UP arrow was last pressed
+					{
+						ap_tmp = ap_cur->next;
+						if(ap_tmp)
+						{
+							while( (0 != (G.pSelectedAP = ap_tmp)) && IsAp2BeSkipped(ap_tmp) )
+								ap_tmp = ap_tmp->next;
+						}
+						if(!ap_tmp)//we have reached the first element in the list, so go in another direction
+						{//upon we have an AP that is not skipped
+							ap_tmp = ap_cur->prev;
+							if(ap_tmp)
+							{
+								while( (0 != (G.pSelectedAP = ap_tmp)) && IsAp2BeSkipped(ap_tmp) )
+									ap_tmp = ap_tmp->prev;
+							}
+						}
+					}
+					else if(1 == G.SelectionDirectionDownOrUP)//DOWN arrow was last pressed
+					{
+						ap_tmp = ap_cur->prev;
+						if(ap_tmp)
+						{
+							while( (0 != (G.pSelectedAP = ap_tmp)) && IsAp2BeSkipped(ap_tmp) )
+								ap_tmp = ap_tmp->prev;
+						}
+						if(!ap_tmp)//we have reached the last element in the list, so go in another direction
+						{//upon we have an AP that is not skipped
+							ap_tmp = ap_cur->next;
+							if(ap_tmp)
+							{
+								while( (0 != (G.pSelectedAP = ap_tmp)) && IsAp2BeSkipped(ap_tmp) )
+									ap_tmp = ap_tmp->next;
+							}
+						}
+					}
+				}
+				/////////////////////////////////////////////////////////////////////////////////////
 				ap_cur = ap_cur->prev;
 				continue;
 			}
@@ -3736,7 +3754,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 			strbuf[ws_col - 1] = '\0';
 
-			if (G.selection_ap && ((num_ap) == G.selected_ap))
+			if (G.pSelectedAP && (G.pSelectedAP == ap_cur))
 			{
 				if (G.mark_cur_ap_to_deauth)
 				{
@@ -3841,7 +3859,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 			fprintf( stderr, "\n");
 
-			if ((G.selection_ap && ((num_ap) == G.selected_ap))
+			if ((G.pSelectedAP && (G.pSelectedAP == ap_cur))
 					|| (ap_cur->marked) || CHECK_REALLY_DEAUTH(ap_cur))
 			{
 				textstyle(TEXT_RESET);
@@ -3905,7 +3923,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 			st_cur = G.st_end;
 
-			if (G.selection_ap
+			if (G.pSelectedAP
 					&& (memcmp(G.selected_bssid, ap_cur->bssid, 6) == 0))
 			{
 				textstyle(TEXT_REVERSE);
@@ -4045,7 +4063,7 @@ void dump_print(int ws_row, int ws_col, int if_num)
 				st_cur = st_cur->prev;
 			}
 
-			if ((G.selection_ap
+			if ((G.pSelectedAP
 					&& (memcmp(G.selected_bssid, ap_cur->bssid, 6) == 0))
 					|| (ap_cur->marked) || (CHECK_REALLY_DEAUTH(ap_cur)))
 			{
@@ -6196,7 +6214,7 @@ int rearrange_frequencies()
 }
 
 int main(int argc, char *argv[])
-{
+{getchar();
 	long time_slept, cycle_time, cycle_time2;
 	char * output_format_string;
 	int caplen = 0, i, j, fdh, fd_is_set, chan_count, freq_count, unused;
