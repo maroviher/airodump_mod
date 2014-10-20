@@ -295,7 +295,8 @@ struct ST_info
 	int missed; /* number of missed packets  */
 	unsigned int lastseq; /* last seen sequence number */
 	unsigned int m_uiEAPOLpkts;
-	unsigned int m_uiAssocLpkts;
+	unsigned int m_uiCntAssocRequest, m_uiCntAssocResp, m_uiCntReAssocRequest, m_uiCntReAssocResp,
+                 m_uiCntProbeRequest, m_uiCntProbeResp, m_uiCntDisass, m_uiCntAuth, m_uiCntDeauth;
 	unsigned long m_lastDeauthProcessingTime_us;
 	struct timeval m_timeval_lastDeauth;
 	unsigned long m_ulLastDeauthTimeDelta_us;
@@ -470,7 +471,8 @@ struct globals
 
 	int ignore_negative_one;
 	u_int maxsize_essid_seen;
-	int show_manufacturer;
+	char show_manufacturer;
+	char show_deauth_stat;
 	int show_uptime;
 } G;
 

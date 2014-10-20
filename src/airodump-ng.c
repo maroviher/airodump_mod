@@ -479,8 +479,10 @@ void resetSelection()
 #define KEY_ARROW_RIGHT 0x43	//start deauth attack on AP
 #define KEY_ARROW_LEFT	0x44	//start deauth attack on AP
 #define KEY_a		0x61	//cycle through active information (ap/sta/ap+sta/ap+sta+ack)
+#define KEY_b		0x62	//manufacturer on/off
 #define KEY_c		0x63	//cycle through channels
 #define KEY_d		0x64	//default mode
+#define KEY_g		0x67	//show/hide attack statistics
 #define KEY_i		0x69	//inverse sorting
 #define KEY_m		0x6D	//mark current AP
 #define KEY_n		0x6E	//?
@@ -579,6 +581,19 @@ void input_thread(void *arg)
 			}
 			else
 				snprintf(G.message, sizeof(G.message), "][ resumed output");
+		}
+
+		if (keycode == KEY_b)
+			G.show_manufacturer = (G.show_manufacturer + 1) % 2;
+
+		if (keycode == KEY_g)
+		{
+			G.show_deauth_stat = (G.show_deauth_stat + 1) % 2;
+			static const char strDeauthStat[]="EAPOL/AssocReq/AssocResp/ReAssocReq/ReAssocResp/ProbeRequest/ProbeResp/Disass/Auth/Deauth";
+			if(G.show_deauth_stat)
+				snprintf(G.message, sizeof(G.message), strDeauthStat);
+			else
+				memset(G.message, ' ', sizeof(G.message));
 		}
 
 		if (keycode == KEY_r)
@@ -2216,6 +2231,49 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 		}
 	}
 
+	if(st_cur)
+	{
+		switch(h80211[0])
+		{
+		case 0x00:
+			//assoc req
+			st_cur->m_uiCntAssocRequest++;
+			break;
+		case 0x10:
+			//assoc resp
+			st_cur->m_uiCntAssocResp++;
+			break;
+		case 0x20:
+			//reassoc req
+			st_cur->m_uiCntReAssocRequest++;
+			break;
+		case 0x30:
+			//reassoc resp
+			st_cur->m_uiCntReAssocResp++;
+			break;
+		case 0x40:
+			//probe request
+			st_cur->m_uiCntProbeRequest++;
+			break;
+		case 0x50:
+			//probe resp
+			st_cur->m_uiCntProbeResp++;
+			break;
+		case 0xA0:
+			//disassoc
+			st_cur->m_uiCntDisass++;
+			break;
+		case 0xB0:
+			//authentication
+			st_cur->m_uiCntAuth++;
+			break;
+		case 0xC0:
+			//deauthentication
+			st_cur->m_uiCntDeauth++;
+			break;
+		}
+	}
+
 	/* packet parsing: Authentication Response */
 
 	if (h80211[0] == 0xB0 && caplen >= 30)
@@ -2309,7 +2367,6 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 		if (st_cur != NULL)
 		{
 			st_cur->wpa.state = 0;
-			st_cur->m_uiAssocLpkts++;
 		}
 	}
 
@@ -3388,15 +3445,11 @@ void dump_print(int ws_row, int ws_col, int if_num)
 	struct ST_info *st_cur;
 	struct NA_info *na_cur;
 	int columns_ap = 83;
-	char* str_columns_sta;
-	if (G.show_manufacturer)
-		str_columns_sta =
-				" BSSID              STATION            Assc/EAPOL  PWR  dtp tlde    Rate    Lost    Frames  !Manuf!  Probes";
-	else
-		str_columns_sta =
-				" BSSID              STATION            Assc/EAPOL  PWR  dtp tlde    Rate    Lost    Frames  Probes";
+	const char str_columns_sta[]=" BSSID              STATION            PWR  dtp tlde    Rate    Lost   Frames";
 
-	int columns_sta = strlen(str_columns_sta);
+	if(ws_col > (int)sizeof(strbuf))
+		ws_col = sizeof(strbuf);
+
 	int columns_na = 68;
 
 	int num_ap;
@@ -3882,7 +3935,16 @@ void dump_print(int ws_row, int ws_col, int if_num)
 
 	if (G.show_sta)
 	{
-		memcpy(strbuf, str_columns_sta, columns_sta);
+		strbuf[0] = 0;
+		strcat(strbuf, str_columns_sta);
+		if (G.show_manufacturer)
+			strcat(strbuf, "  !Manuf!");
+		if (G.show_deauth_stat)
+			strcat(strbuf, "  W/A/a/R/r/P/p/D/T/t");
+		strcat(strbuf, " Probes");
+		int iSpacesCountToFIll = ws_col - strlen(strbuf) - 1;
+		if(iSpacesCountToFIll > 0)
+			memset(strbuf + strlen(strbuf), ' ', iSpacesCountToFIll);
 		strbuf[ws_col - 1] = '\0';
 		fprintf( stderr, "%s\n", strbuf);
 
@@ -3999,66 +4061,68 @@ void dump_print(int ws_row, int ws_col, int if_num)
 				if (ws_row != 0 && nlines >= ws_row)
 					return;
 
+				int iFormattedLen = 0;
+				strbuf[0] = 0;
 				if (!memcmp(ap_cur->bssid, BROADCAST, 6))
-					fprintf( stderr, " (not associated) ");
+					iFormattedLen+=sprintf( strbuf, "(not associated) ");
 				else
-					fprintf( stderr, " %02X:%02X:%02X:%02X:%02X:%02X",
+					iFormattedLen+=sprintf( strbuf, "%02X:%02X:%02X:%02X:%02X:%02X",
 							ap_cur->bssid[0], ap_cur->bssid[1],
 							ap_cur->bssid[2], ap_cur->bssid[3],
 							ap_cur->bssid[4], ap_cur->bssid[5]);
 
-				fprintf( stderr, "  %02X:%02X:%02X:%02X:%02X:%02X",
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "  %02X:%02X:%02X:%02X:%02X:%02X",
 						st_cur->stmac[0], st_cur->stmac[1], st_cur->stmac[2],
 						st_cur->stmac[3], st_cur->stmac[4], st_cur->stmac[5]);
 
-				fprintf( stderr, "  %4d/%5d", st_cur->m_uiAssocLpkts,
-						st_cur->m_uiEAPOLpkts);
-				fprintf( stderr, "  %3d ", st_cur->power);
-				fprintf( stderr, "%4lu ",
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "  %3d ", st_cur->power);
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "%4lu ",
 						st_cur->m_lastDeauthProcessingTime_us / 1000);
-				fprintf( stderr, "%4lu ",
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "%4lu ",
 						st_cur->m_ulLastDeauthTimeDelta_us / 1000);
 
-				fprintf( stderr, "  %2d", st_cur->rate_to / 1000000);
-				fprintf( stderr, "%c", (st_cur->qos_fr_ds) ? 'e' : ' ');
-				fprintf( stderr, "-%2d", st_cur->rate_from / 1000000);
-				fprintf( stderr, "%c", (st_cur->qos_to_ds) ? 'e' : ' ');
-				fprintf( stderr, "  %4d", st_cur->missed);
-				fprintf( stderr, " %8ld", st_cur->nb_pkt);
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "  %2d", st_cur->rate_to / 1000000);
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "%c", (st_cur->qos_fr_ds) ? 'e' : ' ');
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "-%2d", st_cur->rate_from / 1000000);
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "%c", (st_cur->qos_to_ds) ? 'e' : ' ');
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, "  %4d", st_cur->missed);
+				iFormattedLen+=sprintf( strbuf+iFormattedLen, " %8ld", st_cur->nb_pkt);
 
-				//print client manufacturer
 				if (G.show_manufacturer)
-					fprintf( stderr, "  !%s!", st_cur->manuf);
+					iFormattedLen+=sprintf( strbuf+iFormattedLen, "  !%s!", st_cur->manuf);
 
-				if (ws_col > (columns_sta - 6))
+				if(G.show_deauth_stat)
 				{
-					memset(ssid_list, 0, sizeof(ssid_list));
-
-					for (i = 0, n = 0; i < NB_PRB; i++)
-					{
-						if (st_cur->probes[i][0] == '\0')
-							continue;
-
-						snprintf(ssid_list + n, sizeof(ssid_list) - n - 1,
-								"%c%s", (i > 0) ? ',' : ' ', st_cur->probes[i]);
-
-						n += (1 + strlen(st_cur->probes[i]));
-
-						if (n >= (int) sizeof(ssid_list))
-							break;
-					}
-
-					memset(strbuf, 0, sizeof(strbuf));
-					snprintf(strbuf, sizeof(strbuf) - 1, "%-256s", ssid_list);
-					strbuf[ws_col - (columns_sta - 6)
-							- ((G.show_manufacturer) ?
-									(strlen(st_cur->manuf) - strlen("!Manuf!")
-											+ 2) :
-									(0))] = '\0';
-					fprintf( stderr, " %s", strbuf);
+					iFormattedLen+=sprintf( strbuf+iFormattedLen, "  %d/%d/%d/%d/%d/%d/%d/%d/%d/%d",
+						st_cur->m_uiEAPOLpkts,
+						st_cur->m_uiCntAssocRequest, st_cur->m_uiCntAssocResp, st_cur->m_uiCntReAssocRequest,
+						st_cur->m_uiCntReAssocResp, st_cur->m_uiCntProbeRequest, st_cur->m_uiCntProbeResp,
+						st_cur->m_uiCntDisass, st_cur->m_uiCntAuth, st_cur->m_uiCntDeauth);
 				}
 
-				fprintf( stderr, "\n");
+				//print probe requests of the station
+				memset(ssid_list, 0, sizeof(ssid_list));
+				for (i = 0, n = 0; i < NB_PRB; i++)
+				{
+					if (st_cur->probes[i][0] == '\0')
+						continue;
+
+					snprintf(ssid_list + n, sizeof(ssid_list) - n - 1,
+							"%c%s", (i > 0) ? ',' : ' ', st_cur->probes[i]);
+
+					n += (1 + strlen(st_cur->probes[i]));
+
+					if (n >= (int) sizeof(ssid_list))
+						break;
+				}
+
+				if(iFormattedLen + n < (int)sizeof(strbuf))
+					strncat(strbuf + iFormattedLen, ssid_list, sizeof(strbuf) - iFormattedLen - 1);
+				if(ws_col > n + iFormattedLen + 1)
+					memset(strbuf + iFormattedLen + n, ' ', ws_col - n - iFormattedLen - 1);
+				strbuf[ws_col - 1] = '\0';
+				fprintf( stderr, " %s\n", strbuf);
+
 
 				st_cur = st_cur->prev;
 			}
@@ -6214,7 +6278,7 @@ int rearrange_frequencies()
 }
 
 int main(int argc, char *argv[])
-{getchar();
+{
 	long time_slept, cycle_time, cycle_time2;
 	char * output_format_string;
 	int caplen = 0, i, j, fdh, fd_is_set, chan_count, freq_count, unused;
