@@ -159,6 +159,7 @@ static uchar ZERO[32] = "\x00\x00\x00\x00\x00\x00\x00\x00"
 int read_pkts = 0;
 
 //vasa
+FILE* g_fdLog = NULL;
 unsigned long ulRead_pkts = 0, ulRead_pkts_tmp = 0;
 unsigned long ulRead_Bytes = 0, ulRead_Bytes_tmp = 0;
 unsigned int g_uiBytesDeltaPerSec = 0, g_uiPacketsDeltaPerSec = 0;
@@ -166,6 +167,7 @@ unsigned int g_uiTempTimeAggregator = 0;
 unsigned int g_flag500ms_hopper_for_print = 0;
 struct timeval timeBytesPerSec;
 unsigned long g_ulRead_pkts_beacons = 0;
+char gAPshowAllKnownClients = 0;
 
 
 int abg_chans[] =

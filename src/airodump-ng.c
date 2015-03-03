@@ -84,29 +84,37 @@ void dump_sort(void);
 void dump_print(int ws_row, int ws_col, int if_num);
 
 FILE* pFileWpaHandsh = 0;
-char strWpaHandshDir[] = "/usr/share/nginx/php/";
+char strWpaHandshDir[1000];
+
+const char* MAC_bin2str(unsigned char* pBinMac)
+{
+	static char strbuf[18];
+	snprintf(strbuf, sizeof(strbuf), "%02X:%02X:%02X:%02X:%02X:%02X",
+						pBinMac[0], pBinMac[1], pBinMac[2],
+						pBinMac[3], pBinMac[4], pBinMac[5]);
+	return (char*)strbuf;
+}
 
 char* GetPathToHandshakeFile(struct AP_info *ap_cur)
 {
 	static char strbuf[256];
-	snprintf(strbuf, sizeof(strbuf), "%s%02X:%02X:%02X:%02X:%02X:%02X.cap",
+	snprintf(strbuf, sizeof(strbuf), "%s%s.cap",
 						strWpaHandshDir,
-						ap_cur->bssid[0], ap_cur->bssid[1], ap_cur->bssid[2],
-						ap_cur->bssid[3], ap_cur->bssid[4], ap_cur->bssid[5]);
+						MAC_bin2str(ap_cur->bssid));
 	return (char*)strbuf;
 }
 
 void LogWpaHandshake(struct AP_info *ap_cur, struct ST_info *st_cur)
 {
 	char buf[1111];
+	char strStMAC[18];
+	strcpy(strStMAC, MAC_bin2str(st_cur->stmac));
 	snprintf(buf, sizeof(buf) - 1,
-				"WPA handshake: AP(%s, %s, %02X:%02X:%02X:%02X:%02X:%02X) <> STA(%02X:%02X:%02X:%02X:%02X:%02X, %s)",
+				"WPA handshake: AP(%s, %s, %s) <> STA(%s, %s)",
 				ap_cur->essid,
 				ap_cur->manuf,
-				ap_cur->bssid[0], ap_cur->bssid[1], ap_cur->bssid[2],
-				ap_cur->bssid[3], ap_cur->bssid[4], ap_cur->bssid[5],
-				st_cur->stmac[0], st_cur->stmac[1], st_cur->stmac[2],
-				st_cur->stmac[3], st_cur->stmac[4], st_cur->stmac[5],
+				MAC_bin2str(ap_cur->bssid),
+				strStMAC,
 				st_cur->manuf
 	);
 	LogMsg(buf);
@@ -140,6 +148,12 @@ int CreateWpaHandshakeFile(struct AP_info *ap_cur)
 {
 	if(pFileWpaHandsh)
 		return -2;
+
+	//delete all previous cap files
+	char buf[16384];
+	snprintf(buf, sizeof(buf), "rm -f %s*.cap", strWpaHandshDir);
+	system(buf);
+
 	struct pcap_file_header pfh;
 
 	if ((pFileWpaHandsh = fopen(GetPathToHandshakeFile(ap_cur), "wb+")) == NULL)
@@ -194,20 +208,19 @@ int WriteWPAHSpacket(unsigned char *h80211, int caplen, struct rx_info *ri)
 
 void LogMsg(char* pMsg)
 {
-	time_t rawtime;
-	time(&rawtime);
-	struct tm* timeinfo = localtime(&rawtime);
+	char timestr[128];
+	struct tm tm;
+	time_t t = time(NULL);
+	localtime_r(&t, &tm);
+	strftime(timestr, sizeof(timestr), "%Y.%m.%d-%T", &tm);
 
-	char strTime[80];
-	strftime(strTime, 80, "%x %T", timeinfo);
-
-	char buf[16384];
-	snprintf(buf, sizeof(buf), "echo \"%s    -    %s\" >> %sairodump.log", strTime, pMsg, strWpaHandshDir);
-	system(buf);
+	fprintf(g_fdLog, "%s - airodump: %s\n", timestr, pMsg);
+	fflush(g_fdLog);
 }
 
 int StopAirbase()
 {
+	LogMsg("Stopping attack...");
 	if(0 != system("./stopAttack.sh"))
 	{
 		printf("stopAttack.sh error");
@@ -217,6 +230,7 @@ int StopAirbase()
 
 int RestartAirbase(struct AP_info *ap_cur)
 {
+	LogMsg("Restarting airbase...");
 	char buf[555];
 	sprintf(buf, "./startAttack.sh \"%s\"", ap_cur->essid);
 	if(0 != system(buf))
@@ -624,7 +638,7 @@ void resetSelection()
 #define KEY_ARROW_RIGHT 0x43	//start deauth attack on AP
 #define KEY_ARROW_LEFT	0x44	//start deauth attack on AP
 #define KEY_a		0x61	//cycle through active information (ap/sta/ap+sta/ap+sta+ack)
-#define KEY_c		0x63	//cycle through channels
+#define KEY_c		0x63	//show all known client of attacked AP
 #define KEY_d		0x64	//default mode
 #define KEY_i		0x69	//inverse sorting
 #define KEY_m		0x6D	//mark current AP
@@ -767,6 +781,11 @@ void input_thread(void *arg)
 			else
 				snprintf(G.message, sizeof(G.message),
 						"][ realtime sorting deactivated");
+		}
+
+		if (keycode == KEY_c)
+		{
+			gAPshowAllKnownClients = (gAPshowAllKnownClients+1)&1;
 		}
 
 		if (keycode == KEY_m)
@@ -1143,6 +1162,8 @@ char usage[] =
 				"  usage: airodump-ng <options> <interface>[,<interface>,...]\n"
 				"\n"
 				"  Options:\n"
+				"      --path                : absolute path to attack dir '/srv/http/php/'\n"
+				"      -p                    : for maroviher attack\n"
 				"      --ivs                 : Save only captured IVs\n"
 				"      --gpsd                : Use GPSd\n"
 				"      --write      <prefix> : Dump file prefix\n"
@@ -1894,7 +1915,12 @@ int dump_add_packet(unsigned char *h80211, int caplen, struct rx_info *ri,
 		ap_cur->packets = NULL;
 
 		if(0 != (ap_cur->m_bUnderAttack = CheckAPinDeauthFile(ap_cur->bssid)))
+		{
+			char strBuf[222];
+			snprintf(strBuf, sizeof(strBuf), "Starting attack on AP %s", MAC_bin2str(ap_cur->bssid));
+			LogMsg(strBuf);
 			CreateWpaHandshakeFile(ap_cur);
+		}
 		ap_cur->marked = 0;
 		ap_cur->marked_color = 1;
 
@@ -3807,12 +3833,31 @@ void dump_print(int ws_row, int ws_col, int if_num)
 			{
 				if(ap_cur->m_bAirbaseStarted)
 				{
-					LogMsg("Stopping airbase-ng");
+					char strBuf[222];
+					snprintf(strBuf, sizeof(strBuf), "AP under attack %s disappeared, last seen %ds ago. Stopping airbase-ng...",
+							ap_cur->essid,
+							(int)(time(NULL) - ap_cur->tlast));
+					LogMsg(strBuf);
 					StopAirbase();
 					ap_cur->m_bAirbaseStarted = 0;
 				}
 				ap_cur = ap_cur->prev;
 				continue;
+			}
+			else
+			{
+				if(ap_cur->m_bUnderAttack && !ap_cur->m_bAirbaseStarted && ap_cur->bWPAHS_completed)
+				{
+					char strBuf[222];
+					snprintf(strBuf, sizeof(strBuf), "AP under attack %s found again on channel=%d",
+							ap_cur->essid, ap_cur->channel);
+					LogMsg(strBuf);
+					if (CHECK_REALLY_DEAUTH(ap_cur))
+					{
+						RestartAirbase(ap_cur);
+						ap_cur->m_bAirbaseStarted = 1;
+					}
+				}
 			}
 
 			if (ap_cur->security != 0 && G.f_encrypt != 0
@@ -3984,8 +4029,8 @@ void dump_print(int ws_row, int ws_col, int if_num)
 					if (wi_set_channel(wi[0], ap_cur->channel) == 0)
 					{
 						char buf[1024];
-						sprintf(buf, "'%s' - found on channel %d, disabling hopping",
-								ap_cur->essid, ap_cur->channel);
+						sprintf(buf, "AP under attack '%s' - %s - found on channel %d, disabling hopping",
+								ap_cur->essid, MAC_bin2str(ap_cur->bssid), ap_cur->channel);
 						LogMsg(buf);
 						G.channel[0] = ap_cur->channel;
 						G.singlechan = 1;
@@ -4148,11 +4193,17 @@ void dump_print(int ws_row, int ws_col, int if_num)
 			//walk through all stations
 			while (st_cur != NULL)
 			{
-				if (st_cur->base != ap_cur
-						|| time( NULL) - st_cur->tlast > G.berlin)
+				if(st_cur->base->m_bUnderAttack && gAPshowAllKnownClients)
 				{
-					st_cur = st_cur->prev;
-					continue;
+				}
+				else
+				{
+					if (st_cur->base != ap_cur
+							|| time( NULL) - st_cur->tlast > G.berlin)
+					{
+						st_cur = st_cur->prev;
+						continue;
+					}
 				}
 
 				if (!memcmp(ap_cur->bssid, BROADCAST, 6) && G.asso_client)
@@ -6481,14 +6532,6 @@ int main(int argc, char *argv[])
 	struct tm *lt;
 
 	mode_t process_mask = umask(0);
-	if(0 != mkdir(strWpaHandshDir, S_IRWXU|S_IRWXG|S_IRWXO))
-	{
-		if(EEXIST != errno)
-		{
-			printf("error mkdir");
-			return 0;
-		}
-	}
 	umask(process_mask);
 	/*
 	 struct sockaddr_in provis_addr;
@@ -6498,6 +6541,7 @@ int main(int argc, char *argv[])
 
 	static struct option long_options[] =
 	{
+	{ "path", 1, 0, 'p' },
 	{ "band", 1, 0, 'b' },
 	{ "beacon", 0, 0, 'e' },
 	{ "beacons", 0, 0, 'e' },
@@ -6542,6 +6586,7 @@ int main(int argc, char *argv[])
 	srand(time( NULL));
 	memset(&G, 0, sizeof(G));
 
+	strWpaHandshDir[0]=0;
 	h80211 = NULL;
 	ivs_only = 0;
 	G.chanoption = 0;
@@ -6688,7 +6733,7 @@ int main(int argc, char *argv[])
 		option_index = 0;
 
 		option = getopt_long(argc, argv,
-				"b:c:egiw:s:t:u:m:d:N:R:aHDBK:Ahf:r:EC:o:x:MU", long_options,
+				"p:b:c:egiw:s:t:u:m:d:N:R:aHDBK:Ahf:r:EC:o:x:MU", long_options,
 				&option_index);
 
 		if (option < 0)
@@ -6709,6 +6754,27 @@ int main(int argc, char *argv[])
 
 			printf("\"%s --help\" for help.\n", argv[0]);
 			return (1);
+
+		case 'p':
+		{
+			char strLogFile[1000];
+			if(optarg[strlen(optarg)-1] != '/')
+			{
+				printf("error path to attack dir '%s' must be with / on the end\n", optarg);
+				return (1);
+			}
+			strcpy(strWpaHandshDir, optarg);
+			strcpy(strLogFile, optarg);
+			strcat(strLogFile, "airodump.log");
+
+			if(NULL == (g_fdLog = fopen(strLogFile, "a")))
+			{
+				printf("error %d creating logfile='%s', %s\n", errno, strLogFile, strerror(errno));
+				return (1);
+			}
+			chmod(strLogFile, 0666);
+		}
+			break;
 
 		case 'E':
 			G.detect_anomaly = 1;
@@ -7135,6 +7201,12 @@ int main(int argc, char *argv[])
 			goto usage;
 		}
 	} while (1);
+
+	if(strWpaHandshDir[0] == 0)
+	{
+		printf("Wpa handshake dir unspecified, type parameter -p\n");
+		return (1);
+	}
 
 	if (argc - optind != 1 && G.s_file == NULL)
 	{
