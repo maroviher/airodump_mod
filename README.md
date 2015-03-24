@@ -12,5 +12,4 @@ git checkout origin/kick_off<br>
 git checkout -b kick_off origin/kick_off<br>
 libnl=false make -j4<br>
 libnl=false make install<br>
-scripts/airodump-ng-oui-update #download MAC manufacturer database<br>
-make install
+airodump-ng-oui-update #download MAC manufacturer database<br>
