@@ -7,7 +7,8 @@ What is better than in original airodump-ng?<br>
 <b>Installation steps</b>
 git clone https://github.com/maroviher/airodump_mod.git<br>
 cd airodump_mod/<br>
-make uninstall #uninstall currently installed aircrack suite, if any
+# uninstall currently installed aircrack suite, if any<br>
+libnl=false make uninstall<br>
 git checkout origin/kick_off<br>
 git checkout -b kick_off origin/kick_off<br>
 libnl=false make -j4<br>
