@@ -3834,9 +3834,8 @@ void dump_print(int ws_row, int ws_col, int if_num)
 				if(ap_cur->m_bAirbaseStarted)
 				{
 					char strBuf[222];
-					snprintf(strBuf, sizeof(strBuf), "AP under attack %s disappeared, last seen %ds ago. Stopping airbase-ng...",
-							ap_cur->essid,
-							(int)(time(NULL) - ap_cur->tlast));
+					snprintf(strBuf, sizeof(strBuf), "AP under attack %s disappeared, stopping airbase-ng...",
+							ap_cur->essid);
 					LogMsg(strBuf);
 					StopAirbase();
 					ap_cur->m_bAirbaseStarted = 0;
@@ -3846,17 +3845,18 @@ void dump_print(int ws_row, int ws_col, int if_num)
 			}
 			else
 			{
-				if(ap_cur->m_bUnderAttack && !ap_cur->m_bAirbaseStarted && ap_cur->bWPAHS_completed)
+				if(CHECK_REALLY_DEAUTH(ap_cur) &&
+					ap_cur->m_bUnderAttack &&
+					!ap_cur->m_bAirbaseStarted &&
+					ap_cur->bWPAHS_completed)
 				{
 					char strBuf[222];
-					snprintf(strBuf, sizeof(strBuf), "AP under attack %s found again on channel=%d",
-							ap_cur->essid, ap_cur->channel);
+					snprintf(strBuf, sizeof(strBuf),
+							"AP under attack %s found again on channel=%d, was away=%s",
+							ap_cur->essid, ap_cur->channel, parse_timestamp((unsigned long long)(time(NULL) - ap_cur->tlast)));
 					LogMsg(strBuf);
-					if (CHECK_REALLY_DEAUTH(ap_cur))
-					{
-						RestartAirbase(ap_cur);
-						ap_cur->m_bAirbaseStarted = 1;
-					}
+					RestartAirbase(ap_cur);
+					ap_cur->m_bAirbaseStarted = 1;
 				}
 			}
 
